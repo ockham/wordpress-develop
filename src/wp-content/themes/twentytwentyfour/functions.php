@@ -204,3 +204,13 @@ if ( ! function_exists( 'twentytwentyfour_pattern_categories' ) ) :
 endif;
 
 add_action( 'init', 'twentytwentyfour_pattern_categories' );
+
+function register_hooked_block( $hooked_blocks, $position, $anchor_block, $context ) {
+	if ( $anchor_block === 'core/post-content' && $position === 'after' ) {
+		$hooked_blocks[] = 'core/loginout';
+	}
+
+	return $hooked_blocks;
+}
+
+add_filter( 'hooked_block_types', 'register_hooked_block', 10, 4 );
