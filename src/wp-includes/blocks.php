@@ -1003,6 +1003,115 @@ function set_ignored_hooked_blocks_metadata( &$parsed_anchor_block, $relative_po
 }
 
 /**
+ * Runs the hooked blocks algorithm on the given content.
+ *
+ * This function is meant for internal use only.
+ *
+ * @since 6.6.0
+ * @access private
+ *
+ * @param string $content Serialized content.
+ * @param WP_Block_Template|WP_Post|array $context       A block template, template part, `wp_navigation` post object,
+ *                                                       or pattern that the blocks belong to.
+ * @return string The serialized markup with the ignored hooked blocks metadata applied.
+ */
+function apply_hooked_blocks_to_content( $content, $context, $callback = 'insert_hooked_blocks' ) {
+	$hooked_blocks = get_hooked_blocks();
+	if ( empty( $hooked_blocks ) && ! has_filter( 'hooked_block_types' ) ) {
+		return $content;
+	}
+
+	$blocks = parse_blocks( $content );
+
+	$before_block_visitor = make_before_block_visitor( $hooked_blocks, $context, $callback );
+	$after_block_visitor  = make_after_block_visitor( $hooked_blocks, $context, $callback );
+
+	return traverse_and_serialize_blocks( $blocks, $before_block_visitor, $after_block_visitor );
+}
+
+/**
+ * Accepts the serialized markup of a block and its inner blocks, and returns serialized markup of the inner blocks.
+ *
+ * @since 6.6.0
+ * @access private
+ *
+ * @param string $serialized_block The serialized markup of a block and its inner blocks.
+ * @return string
+ */
+function remove_serialized_parent_block( $serialized_block ) {
+	$start = strpos( $serialized_block, '-->' ) + strlen( '-->' );
+	$end   = strrpos( $serialized_block, '<!--' );
+	return substr( $serialized_block, $start, $end - $start );
+}
+
+/**
+ * Updates the wp_postmeta with the list of ignored hooked blocks where the inner blocks are stored as post content.
+ * Currently only supports `wp_navigation` post types.
+ *
+ * @since 6.6.0
+ * @access private
+ *
+ * @param stdClass $post Post object.
+ * @return stdClass The updated post object.
+ */
+function update_ignored_hooked_blocks_postmeta( $post ) {
+	/*
+	 * In this scenario the user has likely tried to create a navigation via the REST API.
+	 * In which case we won't have a post ID to work with and store meta against.
+	 */
+	if ( empty( $post->ID ) ) {
+		return $post;
+	}
+
+	/**
+	 * Skip meta generation when consumers intentionally update specific Navigation fields and omit the content update.
+	 * Or if the incoming post is not a Navigation post type.
+	 */
+	if ( ! isset( $post->post_content ) || ( isset( $post->post_type ) && 'wp_navigation' !== $post->post_type ) ) {
+		return $post;
+	}
+
+	$blocks     = parse_blocks( $post->post_content );
+	$attributes = array();
+
+	if ( isset( $post->ID ) ) {
+		$ignored_hooked_blocks = get_post_meta( $post->ID, '_wp_ignored_hooked_blocks', true );
+		if ( ! empty( $ignored_hooked_blocks ) ) {
+			$ignored_hooked_blocks  = json_decode( $ignored_hooked_blocks, true );
+			$attributes['metadata'] = array(
+				'ignoredHookedBlocks' => $ignored_hooked_blocks,
+			);
+		}
+	}
+
+	$mocked_parent_block = array(
+		'blockName'    => 'core/navigation',
+		'attrs'        => $attributes,
+		'innerBlocks'  => $blocks,
+		'innerContent' => array_fill( 0, count( $blocks ), null ),
+	);
+
+	$serialized_block = apply_hooked_blocks_to_content( traverse_and_serialize_block( $mocked_parent_block ), get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
+	$root_block       = parse_blocks( $serialized_block )[0];
+
+	$ignored_hooked_blocks = isset( $root_block['attrs']['metadata']['ignoredHookedBlocks'] )
+		? $root_block['attrs']['metadata']['ignoredHookedBlocks']
+		: array();
+
+	if ( ! empty( $ignored_hooked_blocks ) ) {
+		$existing_ignored_hooked_blocks = get_post_meta( $post->ID, '_wp_ignored_hooked_blocks', true );
+		if ( ! empty( $existing_ignored_hooked_blocks ) ) {
+			$existing_ignored_hooked_blocks = json_decode( $existing_ignored_hooked_blocks, true );
+			$ignored_hooked_blocks          = array_unique( array_merge( $ignored_hooked_blocks, $existing_ignored_hooked_blocks ) );
+		}
+		update_post_meta( $post->ID, '_wp_ignored_hooked_blocks', json_encode( $ignored_hooked_blocks ) );
+	}
+
+	$post->post_content = remove_serialized_parent_block( $serialized_block );
+	return $post;
+}
+
+/**
  * Returns a function that injects the theme attribute into, and hooked blocks before, a given block.
  *
  * The returned function can be used as `$pre_callback` argument to `traverse_and_serialize_block(s)`,
