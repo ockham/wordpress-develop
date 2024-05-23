@@ -1003,7 +1003,7 @@ function set_ignored_hooked_blocks_metadata( &$parsed_anchor_block, $relative_po
 }
 
 /**
- * Runs the hooked blocks algorithm on the given content.
+ * Runs the hooked blocks algorithm on the given content
  *
  * This function is meant for internal use only.
  *
@@ -1013,9 +1013,12 @@ function set_ignored_hooked_blocks_metadata( &$parsed_anchor_block, $relative_po
  * @param string $content Serialized content.
  * @param WP_Block_Template|WP_Post|array $context       A block template, template part, `wp_navigation` post object,
  *                                                       or pattern that the blocks belong to.
- * @return string The serialized markup with the ignored hooked blocks metadata applied.
+ * @param callable                        $callback      A function that will be called for each block to generate
+ *                                                       the markup for a given list of blocks that are hooked to it.
+ *                                                       Default: 'insert_hooked_blocks'.
+ * @return string The serialized markup.
  */
-function insert_hooked_blocks_into_content( $content, $context, $callback = 'insert_hooked_blocks' ) {
+function apply_block_hooks_to_content( $content, $context, $callback = 'insert_hooked_blocks' ) {
 	$hooked_blocks = get_hooked_blocks();
 	if ( empty( $hooked_blocks ) && ! has_filter( 'hooked_block_types' ) ) {
 		return $content;
@@ -1096,7 +1099,7 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 		$post->post_content
 	);
 
-	$serialized_block = insert_hooked_blocks_into_content( $markup, get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
+	$serialized_block = apply_block_hooks_to_content( $markup, get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
 	$root_block       = parse_blocks( $serialized_block )[0];
 
 	$ignored_hooked_blocks = isset( $root_block['attrs']['metadata']['ignoredHookedBlocks'] )
