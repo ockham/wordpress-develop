@@ -1078,7 +1078,6 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 		return $post;
 	}
 
-	$blocks     = parse_blocks( $post->post_content );
 	$attributes = array();
 
 	if ( isset( $post->ID ) ) {
