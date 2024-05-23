@@ -1074,7 +1074,7 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 	/**
 	 * Skip meta generation when the post content is not a navigation block.
 	 */
-	if ( isset( $post->post_type ) && 'wp_navigation' !== $post->post_type ) {
+	if ( ! isset( $post->post_type ) || 'wp_navigation' !== $post->post_type ) {
 		return $post;
 	}
 
