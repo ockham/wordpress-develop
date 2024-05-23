@@ -1599,7 +1599,7 @@ function inject_ignored_hooked_blocks_metadata_attributes( $changes, $deprecated
 		return $template;
 	}
 
-	$changes->post_content = apply_hooked_blocks_to_content( $changes->post_content, $template, 'set_ignored_hooked_blocks_metadata' );
+	$changes->post_content = insert_hooked_blocks_into_content( $changes->post_content, $template, 'set_ignored_hooked_blocks_metadata' );
 
 	return $changes;
 }

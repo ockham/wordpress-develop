@@ -1015,7 +1015,7 @@ function set_ignored_hooked_blocks_metadata( &$parsed_anchor_block, $relative_po
  *                                                       or pattern that the blocks belong to.
  * @return string The serialized markup with the ignored hooked blocks metadata applied.
  */
-function apply_hooked_blocks_to_content( $content, $context, $callback = 'insert_hooked_blocks' ) {
+function insert_hooked_blocks_into_content( $content, $context, $callback = 'insert_hooked_blocks' ) {
 	$hooked_blocks = get_hooked_blocks();
 	if ( empty( $hooked_blocks ) && ! has_filter( 'hooked_block_types' ) ) {
 		return $content;
@@ -1098,7 +1098,7 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 		'innerContent' => array_fill( 0, count( $blocks ), null ),
 	);
 
-	$serialized_block = apply_hooked_blocks_to_content( traverse_and_serialize_block( $mocked_parent_block ), get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
+	$serialized_block = insert_hooked_blocks_into_content( traverse_and_serialize_block( $mocked_parent_block ), get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
 	$root_block       = parse_blocks( $serialized_block )[0];
 
 	$ignored_hooked_blocks = isset( $root_block['attrs']['metadata']['ignoredHookedBlocks'] )
