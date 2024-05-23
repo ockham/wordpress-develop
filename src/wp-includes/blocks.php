@@ -1064,10 +1064,17 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 	}
 
 	/**
-	 * Skip meta generation when consumers intentionally update specific Navigation fields and omit the content update.
-	 * Or if the incoming post is not a Navigation post type.
+	 * Skip meta generation when consumers intentionally update specific Navigation fields
+	 * and omit the content update.
 	 */
-	if ( ! isset( $post->post_content ) || ( isset( $post->post_type ) && 'wp_navigation' !== $post->post_type ) ) {
+	if ( ! isset( $post->post_content ) ) {
+		return $post;
+	}
+
+	/**
+	 * Skip meta generation when the post content is not a navigation block.
+	 */
+	if ( isset( $post->post_type ) && 'wp_navigation' !== $post->post_type ) {
 		return $post;
 	}
 
