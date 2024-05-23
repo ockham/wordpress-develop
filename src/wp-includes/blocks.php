@@ -1091,14 +1091,13 @@ function update_ignored_hooked_blocks_postmeta( $post ) {
 		}
 	}
 
-	$mocked_parent_block = array(
-		'blockName'    => 'core/navigation',
-		'attrs'        => $attributes,
-		'innerBlocks'  => $blocks,
-		'innerContent' => array_fill( 0, count( $blocks ), null ),
+	$markup = get_comment_delimited_block_content(
+		'core/navigation',
+		$attributes,
+		$post->post_content
 	);
 
-	$serialized_block = insert_hooked_blocks_into_content( traverse_and_serialize_block( $mocked_parent_block ), get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
+	$serialized_block = insert_hooked_blocks_into_content( $markup, get_post( $post->ID ), 'set_ignored_hooked_blocks_metadata' );
 	$root_block       = parse_blocks( $serialized_block )[0];
 
 	$ignored_hooked_blocks = isset( $root_block['attrs']['metadata']['ignoredHookedBlocks'] )
