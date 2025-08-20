@@ -88,4 +88,25 @@ class Tests_Blocks_wpBlockBindingsProcessor extends WP_UnitTestCase {
 			$processor->build()
 		);
 	}
+
+	public function test_remove_node() {
+		$figure_opener = '<figure class="wp-block-image">';
+		$img           = '<img src="breakfast.jpg" alt="" class="wp-image-1"/>';
+		$figure_closer = '</figure>';
+		$processor     = WP_Block_Bindings_Processor::create_fragment(
+			$figure_opener .
+			$img .
+			'<figcaption class="wp-element-caption">Breakfast at a <em>café</em> in Berlin</figcaption>' .
+			$figure_closer
+		);
+
+		$processor->next_tag( array( 'tag_name' => 'figcaption' ) );
+
+		$this->assertTrue( $processor->remove_node() );
+
+		$this->assertEquals(
+			$figure_opener . $img . $figure_closer,
+			$processor->build()
+		);
+	}
 }

@@ -67,4 +67,29 @@ class WP_Block_Bindings_Processor extends WP_HTML_Processor {
 
 		return true;
 	}
+
+	public function remove_node() {
+		if ( $this->is_tag_closer() ) {
+			return false;
+		}
+
+		$depth = $this->get_current_depth();
+
+		$this->set_bookmark( '_wp_block_bindings_tag_opener' );
+		// The bookmark names are prefixed with `_` so the key below has an extra `_`.
+		$bm            = $this->bookmarks['__wp_block_bindings_tag_opener'];
+		$this->output .= substr( $this->get_updated_html(), $this->end_of_flushed, $bm->start );
+		$this->release_bookmark( '_wp_block_bindings_tag_opener' );
+
+		// Find matching tag closer.
+		while ( $this->next_token() && $this->get_current_depth() >= $depth ) {
+		}
+
+		$this->set_bookmark( '_wp_block_bindings_tag_closer' );
+		$bm                   = $this->bookmarks['__wp_block_bindings_tag_closer'];
+		$this->end_of_flushed = $bm->start + $bm->length;
+		$this->release_bookmark( '_wp_block_bindings_tag_closer' );
+
+		return true;
+	}
 }
