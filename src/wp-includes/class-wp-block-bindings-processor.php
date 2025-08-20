@@ -26,11 +26,9 @@
  * @since 6.9.0
  */
 class WP_Block_Bindings_Processor extends WP_HTML_Processor {
-	private $output         = '';
-	private $end_of_flushed = 0;
 
 	public function build() {
-		return $this->output . substr( $this->get_updated_html(), $this->end_of_flushed );
+		return $this->get_updated_html();
 	}
 
 	/**
@@ -51,9 +49,8 @@ class WP_Block_Bindings_Processor extends WP_HTML_Processor {
 
 		$this->set_bookmark( '_wp_block_bindings_tag_opener' );
 		// The bookmark names are prefixed with `_` so the key below has an extra `_`.
-		$bm            = $this->bookmarks['__wp_block_bindings_tag_opener'];
-		$this->output .= substr( $this->get_updated_html(), $this->end_of_flushed, $bm->start + $bm->length );
-		$this->output .= $rich_text;
+		$bm    = $this->bookmarks['__wp_block_bindings_tag_opener'];
+		$start = $bm->start + $bm->length;
 		$this->release_bookmark( '_wp_block_bindings_tag_opener' );
 
 		// Find matching tag closer.
@@ -61,9 +58,15 @@ class WP_Block_Bindings_Processor extends WP_HTML_Processor {
 		}
 
 		$this->set_bookmark( '_wp_block_bindings_tag_closer' );
-		$bm                   = $this->bookmarks['__wp_block_bindings_tag_closer'];
-		$this->end_of_flushed = $bm->start;
+		$bm  = $this->bookmarks['__wp_block_bindings_tag_closer'];
+		$end = $bm->start;
 		$this->release_bookmark( '_wp_block_bindings_tag_closer' );
+
+		$this->lexical_updates[] = new WP_HTML_Text_Replacement(
+			$start,
+			$end - $start,
+			$rich_text
+		);
 
 		return true;
 	}
