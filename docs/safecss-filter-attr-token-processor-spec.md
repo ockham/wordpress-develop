@@ -155,8 +155,11 @@ any tokens are accepted inside, at any depth, subject only to:
 
 Outside url constructs, gradients, and passthrough functions, the following
 tokens are accepted: `whitespace`, `ident` (without escapes), `number`,
-`percentage`, `dimension` (without escapes), `string` (without escapes),
-`hash`, `comma`, `colon`, `[-token`, `]-token`, `)-token` (stray closing
+`percentage`, `dimension` (without escapes), `string` (without escapes, and
+closed before end of input — with newlines removed during preprocessing, an
+unclosed string reaches end of input as a regular string token rather than a
+bad-string token, so closure is checked explicitly), `hash`, `comma`, `colon`,
+`[-token`, `]-token`, `)-token` (stray closing
 parens remain accepted — a pinned quirk), and `delim-token`s other than `\`,
 `&`, and `=`. The delim `!` remains accepted, which keeps `!important`
 working.
@@ -224,7 +227,7 @@ Existing suites pass unchanged. New cases to add to `data_safecss_filter_attr`
 - `url( )` with only whitespace is rejected;
 - quoted url function form `url( "…" )` with bad protocol is rejected and is
   not rescuable by the filter;
-- bad string (unclosed quote) in a value is rejected;
+- a string left unclosed at the end of input is rejected;
 - `{` in a value is rejected;
 - comment in a value is rejected;
 - filter receives the declaration source as `$css_test_string` and can rescue
