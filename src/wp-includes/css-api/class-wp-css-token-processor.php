@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Tokenizes CSS according to the CSS Syntax Level 3 specification
+ * Tokenizes CSS according to the CSS Syntax Level 3 specification.
  *
  * This class follows the algorithm in https://www.w3.org/TR/css-syntax-3/ and
  * exposes a pull-based API so callers can stream over large stylesheets without
