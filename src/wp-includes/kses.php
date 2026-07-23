@@ -3062,7 +3062,10 @@ function _safecss_validate_value( $css, $tokens, $url_allowed, $gradient_allowed
 
 	/*
 	 * Hard pass: every url construct, at any nesting depth and for any
-	 * property, must carry a non-empty value with an allowed protocol.
+	 * property, must carry a non-empty value with an allowed protocol. This
+	 * also reaches identifiable url payloads inside malformed constructs
+	 * (a bad-url-token, or a malformed `url(` function), so a bad protocol
+	 * cannot escape via a structurally malformed shape.
 	 */
 	for ( $i = 0; $i < $count; $i++ ) {
 		$token = $tokens[ $i ];
@@ -3070,6 +3073,19 @@ function _safecss_validate_value( $css, $tokens, $url_allowed, $gradient_allowed
 
 		if ( WP_CSS_Token_Processor::TOKEN_URL === $token['type'] ) {
 			$url = trim( (string) $token['value'] );
+		} elseif ( WP_CSS_Token_Processor::TOKEN_BAD_URL === $token['type'] ) {
+			$raw       = substr( $css, $token['start'], $token['length'] );
+			$paren_pos = strpos( $raw, '(' );
+			if ( false !== $paren_pos ) {
+				$raw = substr( $raw, $paren_pos + 1 );
+			}
+			if ( ')' === substr( $raw, -1 ) ) {
+				$raw = substr( $raw, 0, -1 );
+			}
+			$raw = trim( $raw );
+			if ( '' !== $raw && wp_kses_bad_protocol( $raw, $allowed_protocols ) !== $raw ) {
+				return null;
+			}
 		} elseif (
 			WP_CSS_Token_Processor::TOKEN_FUNCTION === $token['type'] &&
 			0 === strcasecmp( (string) $token['value'], 'url' )
@@ -3077,6 +3093,23 @@ function _safecss_validate_value( $css, $tokens, $url_allowed, $gradient_allowed
 			$quoted = _safecss_parse_quoted_url( $tokens, $i );
 			if ( null !== $quoted ) {
 				$url = trim( (string) $tokens[ $quoted['string_index'] ]['value'] );
+			} else {
+				$j = $i + 1;
+				while (
+					$j < $count &&
+					(
+						WP_CSS_Token_Processor::TOKEN_WHITESPACE === $tokens[ $j ]['type'] ||
+						WP_CSS_Token_Processor::TOKEN_COMMENT === $tokens[ $j ]['type']
+					)
+				) {
+					++$j;
+				}
+				if ( $j < $count && WP_CSS_Token_Processor::TOKEN_STRING === $tokens[ $j ]['type'] ) {
+					$payload = trim( (string) $tokens[ $j ]['value'] );
+					if ( '' === $payload || wp_kses_bad_protocol( $payload, $allowed_protocols ) !== $payload ) {
+						return null;
+					}
+				}
 			}
 		}
 

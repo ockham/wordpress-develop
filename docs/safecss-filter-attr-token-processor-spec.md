@@ -117,6 +117,17 @@ decoded value trimmed and checked:
   preserving today's filter-overridable outcome for `color: url(…)`.
 - structurally malformed url constructs (a `bad-url-token`, or a `url(`
   function that does not close with `)` after its string) are soft rejections.
+  Even so, an identifiable url payload inside the malformed construct — the
+  string argument of a malformed `url(` function, or the raw inner text of a
+  `bad-url-token` (its raw source, stripped of the leading `url(` and a
+  trailing `)` if present, then trimmed) — is still protocol-checked: an empty
+  string-argument payload, or either payload failing
+  `wp_kses_bad_protocol()`, is a **hard rejection**, escalating what would
+  otherwise be a soft, filter-rescuable outcome. This is a divergence toward
+  strictness: the old regex-based implementation hard-rejected bad-protocol
+  payloads in some of these malformed shapes and accepted or soft-rejected
+  them in others; the token-based implementation now hard-rejects
+  consistently whenever the payload is identifiable.
 
 CSS escapes are permitted inside url construct values; the protocol check runs
 on the decoded value.
@@ -231,4 +242,10 @@ Existing suites pass unchanged. New cases to add to `data_safecss_filter_attr`
 - `{` in a value is rejected;
 - comment in a value is rejected;
 - filter receives the declaration source as `$css_test_string` and can rescue
-  soft rejections but not hard rejections.
+  soft rejections but not hard rejections;
+- a malformed url function with a bad-protocol string is rejected and is not
+  rescuable by the filter;
+- a bad-url-token with a bad-protocol payload is rejected and is not
+  rescuable by the filter;
+- passthrough and gradient function names match case-sensitively (`CALC(` is
+  rejected).

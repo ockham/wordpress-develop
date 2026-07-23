@@ -1601,6 +1601,41 @@ EOF;
 				'css'      => 'color: red /* comment */',
 				'expected' => '',
 			),
+			// A malformed url() with a bad-protocol string is rejected.
+			array(
+				'css'      => 'background-image: url("javascript:alert(1)" foo)',
+				'expected' => '',
+			),
+			// A bad-url token with a bad-protocol payload is rejected.
+			array(
+				'css'      => "background-image: url(javascript:a'b)",
+				'expected' => '',
+			),
+			// An unquoted url containing whitespace is rejected.
+			array(
+				'css'      => 'background-image: url(a b)',
+				'expected' => '',
+			),
+			// Nesting two levels deep inside a gradient is rejected.
+			array(
+				'css'      => 'background-image: linear-gradient(rgb(calc(1)))',
+				'expected' => '',
+			),
+			// Function name matching is case-sensitive.
+			array(
+				'css'      => 'width: CALC(2em + 3px)',
+				'expected' => '',
+			),
+			// A bad-protocol bad-url nested inside an allowed function is rejected.
+			array(
+				'css'      => "background: calc(url(javascript:a'b))",
+				'expected' => '',
+			),
+			// A comment-separated bad-protocol url payload is rejected.
+			array(
+				'css'      => 'background-image: url(/**/"javascript:alert(1)")',
+				'expected' => '',
+			),
 		);
 	}
 
@@ -1974,6 +2009,26 @@ EOF;
 			array(
 				'css'      => 'color: rgb( 100, 100, 100, .4 )',
 				'expected' => 'color: rgb( 100, 100, 100, .4 )',
+			),
+			// Malformed url() constructs with safe payloads can be rescued by the filter.
+			array(
+				'css'      => 'background-image: url("foo.jpg" bar)',
+				'expected' => 'background-image: url("foo.jpg" bar)',
+			),
+			// A malformed url() with a bad-protocol string cannot be rescued.
+			array(
+				'css'      => 'background-image: url("javascript:alert(1)" foo)',
+				'expected' => '',
+			),
+			// A bad-url token with a bad-protocol payload cannot be rescued.
+			array(
+				'css'      => "background-image: url(javascript:a'b)",
+				'expected' => '',
+			),
+			// A comment-separated bad-protocol url payload cannot be rescued.
+			array(
+				'css'      => 'background-image: url(/**/"javascript:alert(1)")',
+				'expected' => '',
 			),
 		);
 	}
