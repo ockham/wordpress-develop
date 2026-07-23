@@ -1545,6 +1545,62 @@ EOF;
 				'css'      => 'text-anchor: middle',
 				'expected' => 'text-anchor: middle',
 			),
+			// Token-based parsing: a semicolon inside a quoted
+			// string does not split the declaration.
+			array(
+				'css'      => 'font-family: "a;b"',
+				'expected' => 'font-family: "a;b"',
+			),
+			// A semicolon inside url() does not split the declaration.
+			array(
+				'css'      => 'background-image: url("image;1.jpg")',
+				'expected' => 'background-image: url("image;1.jpg")',
+			),
+			// A bad-protocol url nested inside an allowed function is rejected.
+			array(
+				'css'      => 'width: calc(url(javascript:document.title))',
+				'expected' => '',
+			),
+			// A quoted bad-protocol url nested inside an allowed function is rejected.
+			array(
+				'css'      => 'width: calc(url("javascript:alert(1)"))',
+				'expected' => '',
+			),
+			// A valid nested url is allowed on a url-allowed property.
+			array(
+				'css'      => 'background-image: linear-gradient(url(foo.jpg), red)',
+				'expected' => 'background-image: linear-gradient(url(foo.jpg), red)',
+			),
+			// An unclosed function swallows the remainder of the input.
+			array(
+				'css'      => 'width: calc(3em; height: 10px',
+				'expected' => '',
+			),
+			// url() with only whitespace inside is rejected.
+			array(
+				'css'      => 'background-image: url( )',
+				'expected' => '',
+			),
+			// A string left unclosed at the end of input is rejected.
+			array(
+				'css'      => 'color: "red',
+				'expected' => '',
+			),
+			// An opening curly brace is rejected.
+			array(
+				'css'      => 'width: 2px{',
+				'expected' => '',
+			),
+			// url() is matched ASCII case-insensitively, as CSS specifies.
+			array(
+				'css'      => 'background-image: URL(foo.jpg)',
+				'expected' => 'background-image: URL(foo.jpg)',
+			),
+			// A comment in a value is rejected.
+			array(
+				'css'      => 'color: red /* comment */',
+				'expected' => '',
+			),
 		);
 	}
 
@@ -1920,6 +1976,41 @@ EOF;
 				'expected' => 'color: rgb( 100, 100, 100, .4 )',
 			),
 		);
+	}
+
+	/**
+	 * The `safecss_filter_attr_allow_css` filter receives each declaration's
+	 * authored source text as its second argument.
+	 *
+	 * @covers ::safecss_filter_attr
+	 */
+	public function test_safecss_filter_attr_filter_receives_declaration_source() {
+		$received = array();
+		$filter   = static function ( $allow_css, $css_test_string ) use ( &$received ) {
+			$received[] = $css_test_string;
+			return $allow_css;
+		};
+
+		add_filter( 'safecss_filter_attr_allow_css', $filter, 10, 2 );
+		safecss_filter_attr( 'color: rgb(1,2,3); width: 10px' );
+		remove_filter( 'safecss_filter_attr_allow_css', $filter );
+
+		$this->assertSame( array( 'color: rgb(1,2,3)', 'width: 10px' ), $received );
+	}
+
+	/**
+	 * Hard rejections (unknown properties, bad-protocol urls) are dropped
+	 * before the `safecss_filter_attr_allow_css` filter runs and cannot be
+	 * rescued by it.
+	 *
+	 * @covers ::safecss_filter_attr
+	 */
+	public function test_safecss_filter_attr_hard_rejections_bypass_filter() {
+		add_filter( 'safecss_filter_attr_allow_css', '__return_true' );
+		$actual = safecss_filter_attr( 'background-image: url("javascript:alert(1)"); foo: bar' );
+		remove_filter( 'safecss_filter_attr_allow_css', '__return_true' );
+
+		$this->assertSame( '', $actual );
 	}
 
 	/**
