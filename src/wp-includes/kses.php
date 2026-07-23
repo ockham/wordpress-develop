@@ -2554,6 +2554,9 @@ function kses_init() {
  * @since 6.6.0 Added support for `grid-column`, `grid-row`, and `container-type`.
  * @since 6.9.0 Added support for `white-space`.
  * @since 7.1.0 Extended gradient support to allow any single-level nested function.
+ * @since {WP_VERSION} Re-implemented on top of WP_CSS_Token_Processor. Declarations
+ *                     are discovered per CSS declaration-list semantics and url()
+ *                     values are protocol-checked at any nesting depth.
  *
  * @param string $css        A string of CSS rules, decoded from an HTML `style` attribute.
  * @param string $deprecated Not used.
@@ -2568,9 +2571,6 @@ function safecss_filter_attr( $css, $deprecated = '' ) {
 	$css = str_replace( array( "\n", "\r", "\t" ), '', $css );
 
 	$allowed_protocols = wp_allowed_protocols();
-
-	/** @todo Parse enough CSS to split rules without breaking on things like quoted strings. */
-	$css_array = explode( ';', trim( $css ) );
 
 	/**
 	 * Filters the list of allowed CSS attributes.
@@ -2837,126 +2837,572 @@ function safecss_filter_attr( $css, $deprecated = '' ) {
 		return $css;
 	}
 
-	$css = '';
-	foreach ( $css_array as $css_item ) {
-		if ( '' === $css_item ) {
+	$tokens       = _safecss_tokenize( $css );
+	$declarations = _safecss_split_declarations( $tokens );
+
+	$filtered_css = '';
+	foreach ( $declarations as $declaration_tokens ) {
+		$declaration = _safecss_process_declaration(
+			$css,
+			$declaration_tokens,
+			$allowed_attr,
+			$css_url_data_types,
+			$css_gradient_data_types,
+			$allowed_protocols
+		);
+
+		if ( '' === $declaration ) {
 			continue;
 		}
 
-		$css_item        = trim( $css_item );
-		$css_test_string = $css_item;
-		$found           = false;
-		$url_attr        = false;
-		$gradient_attr   = false;
-		$is_custom_var   = false;
+		if ( '' !== $filtered_css ) {
+			$filtered_css .= ';';
+		}
+		$filtered_css .= $declaration;
+	}
 
-		if ( ! str_contains( $css_item, ':' ) ) {
-			$found = true;
-		} else {
-			$parts        = explode( ':', $css_item, 2 );
-			$css_selector = trim( $parts[0] );
+	return $filtered_css;
+}
 
-			// Allow assigning values to CSS variables.
-			if ( in_array( '--*', $allowed_attr, true ) && preg_match( '/^--[a-zA-Z0-9-_]+$/', $css_selector ) ) {
-				$allowed_attr[] = $css_selector;
-				$is_custom_var  = true;
-			}
+/**
+ * Tokenizes a CSS declaration list into an array of token records.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param string $css Preprocessed CSS text.
+ * @return array[] Token records with 'type', 'start', 'length', and 'value' keys.
+ */
+function _safecss_tokenize( $css ) {
+	$tokens    = array();
+	$processor = WP_CSS_Token_Processor::create( $css );
+	if ( null === $processor ) {
+		return $tokens;
+	}
 
-			if ( in_array( $css_selector, $allowed_attr, true ) ) {
-				$found         = true;
-				$url_attr      = in_array( $css_selector, $css_url_data_types, true );
-				$gradient_attr = in_array( $css_selector, $css_gradient_data_types, true );
-			}
+	while ( $processor->next_token() ) {
+		$tokens[] = array(
+			'type'   => $processor->get_token_type(),
+			'start'  => $processor->get_token_start(),
+			'length' => $processor->get_token_length(),
+			'value'  => $processor->get_token_value(),
+		);
+	}
 
-			if ( $is_custom_var ) {
-				$css_value     = trim( $parts[1] );
-				$url_attr      = str_starts_with( $css_value, 'url(' );
-				$gradient_attr = str_contains( $css_value, '-gradient(' );
-			}
+	return $tokens;
+}
+
+/**
+ * Splits a token stream into declarations at top-level semicolons.
+ *
+ * Semicolons nested inside functions, parentheses, brackets, or braces do
+ * not split; semicolons inside strings, urls, and comments are part of those
+ * tokens and never appear as semicolon tokens.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param array[] $tokens Token records from _safecss_tokenize().
+ * @return array[] Array of declarations, each an array of token records.
+ */
+function _safecss_split_declarations( $tokens ) {
+	$declarations = array();
+	$current      = array();
+	$depth        = 0;
+
+	foreach ( $tokens as $token ) {
+		$type = $token['type'];
+
+		if ( 0 === $depth && WP_CSS_Token_Processor::TOKEN_SEMICOLON === $type ) {
+			$declarations[] = $current;
+			$current        = array();
+			continue;
 		}
 
-		if ( $found && $url_attr ) {
-			// Simplified: matches the sequence `url(*)`.
-			preg_match_all( '/url\([^)]+\)/', $parts[1], $url_matches );
-
-			foreach ( $url_matches[0] as $url_match ) {
-				// Clean up the URL from each of the matches above.
-				preg_match( '/^url\(\s*([\'\"]?)(.*)(\g1)\s*\)$/', $url_match, $url_pieces );
-
-				if ( empty( $url_pieces[2] ) ) {
-					$found = false;
-					break;
-				}
-
-				$url = trim( $url_pieces[2] );
-
-				if ( empty( $url ) || wp_kses_bad_protocol( $url, $allowed_protocols ) !== $url ) {
-					$found = false;
-					break;
-				} else {
-					// Remove the whole `url(*)` bit that was matched above from the CSS.
-					$css_test_string = str_replace( $url_match, '', $css_test_string );
-				}
-			}
+		if (
+			WP_CSS_Token_Processor::TOKEN_FUNCTION === $type ||
+			WP_CSS_Token_Processor::TOKEN_LEFT_PAREN === $type ||
+			WP_CSS_Token_Processor::TOKEN_LEFT_BRACKET === $type ||
+			WP_CSS_Token_Processor::TOKEN_LEFT_BRACE === $type
+		) {
+			++$depth;
+		} elseif (
+			$depth > 0 &&
+			(
+				WP_CSS_Token_Processor::TOKEN_RIGHT_PAREN === $type ||
+				WP_CSS_Token_Processor::TOKEN_RIGHT_BRACKET === $type ||
+				WP_CSS_Token_Processor::TOKEN_RIGHT_BRACE === $type
+			)
+		) {
+			--$depth;
 		}
 
-		if ( $found && $gradient_attr ) {
-			/*
-			 * Match every `*-gradient()` in the value, allowing one level of nested functions
-			 * (e.g. rgb(), hsl(), var()). Matching each occurrence, rather than requiring the
-			 * whole value to be a single gradient, lets a gradient combine with a url() image.
-			 */
-			preg_match_all( '/(?:repeating-)?(?:linear|radial|conic)-gradient\((?:[^()]|\([^()]*\))*\)/', $css_test_string, $gradient_matches );
+		$current[] = $token;
+	}
 
-			foreach ( $gradient_matches[0] as $gradient_match ) {
-				// Remove each `gradient()` bit that was matched above from the CSS.
-				$css_test_string = str_replace( $gradient_match, '', $css_test_string );
-			}
-		}
+	if ( ! empty( $current ) ) {
+		$declarations[] = $current;
+	}
 
-		if ( $found ) {
-			/*
-			 * Allow CSS functions like var(), calc(), etc. by removing them from the test string.
-			 * Nested functions and parentheses are also removed, so long as the parentheses are balanced.
-			 */
-			$css_test_string = preg_replace(
-				'/\b(?:var|calc|min|max|minmax|clamp|repeat)(\((?:[^()]|(?1))*\))/',
-				'',
-				$css_test_string
-			);
+	return $declarations;
+}
 
-			/*
-			 * Disallow CSS containing \ ( & } = or comments, except for within url(), var(), calc(), etc.
-			 * which were removed from the test string above.
-			 */
-			$allow_css = ! preg_match( '%[\\\(&=}]|/\*%', $css_test_string );
+/**
+ * Validates a single declaration and returns its authored source when accepted.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param string   $css                     Preprocessed CSS text.
+ * @param array[]  $tokens                  The declaration's token records.
+ * @param string[] $allowed_attr            Allowed property names.
+ * @param string[] $css_url_data_types      Properties that accept url values.
+ * @param string[] $css_gradient_data_types Properties that accept gradient values.
+ * @param string[] $allowed_protocols       Allowed url protocols.
+ * @return string The trimmed declaration source, or '' when rejected.
+ */
+function _safecss_process_declaration( $css, $tokens, $allowed_attr, $css_url_data_types, $css_gradient_data_types, $allowed_protocols ) {
+	while ( ! empty( $tokens ) && WP_CSS_Token_Processor::TOKEN_WHITESPACE === $tokens[0]['type'] ) {
+		array_shift( $tokens );
+	}
+	while ( ! empty( $tokens ) && WP_CSS_Token_Processor::TOKEN_WHITESPACE === end( $tokens )['type'] ) {
+		array_pop( $tokens );
+	}
+	if ( empty( $tokens ) ) {
+		return '';
+	}
 
-			/**
-			 * Filters the check for unsafe CSS in `safecss_filter_attr`.
-			 *
-			 * Enables developers to determine whether a section of CSS should be allowed or discarded.
-			 * By default, the value will be false if the part contains \ ( & } = or comments.
-			 * Return true to allow the CSS part to be included in the output.
-			 *
-			 * @since 5.5.0
-			 *
-			 * @param bool   $allow_css       Whether the CSS in the test string is considered safe.
-			 * @param string $css_test_string The CSS string to test.
-			 */
-			$allow_css = apply_filters( 'safecss_filter_attr_allow_css', $allow_css, $css_test_string );
+	$last   = end( $tokens );
+	$start  = $tokens[0]['start'];
+	$source = substr( $css, $start, $last['start'] + $last['length'] - $start );
 
-			// Only add the CSS part if it passes the regex check.
-			if ( $allow_css ) {
-				if ( '' !== $css ) {
-					$css .= ';';
-				}
-
-				$css .= $css_item;
-			}
+	$colon_index = null;
+	foreach ( $tokens as $index => $token ) {
+		if ( WP_CSS_Token_Processor::TOKEN_COLON === $token['type'] ) {
+			$colon_index = $index;
+			break;
 		}
 	}
 
-	return $css;
+	$url_allowed      = false;
+	$gradient_allowed = false;
+
+	if ( null === $colon_index ) {
+		/*
+		 * Fragments without a colon have historically been kept when their
+		 * content validates; url and gradient constructs are not allowed.
+		 */
+		$value_tokens = $tokens;
+	} else {
+		$css_selector = trim( substr( $css, $start, $tokens[ $colon_index ]['start'] - $start ) );
+
+		if (
+			in_array( '--*', $allowed_attr, true ) &&
+			preg_match( '/^--[a-zA-Z0-9-_]+$/', $css_selector )
+		) {
+			$url_allowed      = true;
+			$gradient_allowed = true;
+		} elseif ( in_array( $css_selector, $allowed_attr, true ) ) {
+			$url_allowed      = in_array( $css_selector, $css_url_data_types, true );
+			$gradient_allowed = in_array( $css_selector, $css_gradient_data_types, true );
+		} else {
+			// Unknown property: dropped without consulting the filter.
+			return '';
+		}
+
+		$value_tokens = array_slice( $tokens, $colon_index + 1 );
+	}
+
+	$allow_css = _safecss_validate_value( $css, $value_tokens, $url_allowed, $gradient_allowed, $allowed_protocols );
+	if ( null === $allow_css ) {
+		// Hard rejection: dropped without consulting the filter.
+		return '';
+	}
+
+	/**
+	 * Filters the check for unsafe CSS in `safecss_filter_attr`.
+	 *
+	 * Enables developers to determine whether a declaration should be allowed
+	 * or discarded. By default, the value is the result of token-based
+	 * validation of the declaration's value. Return true to allow the
+	 * declaration to be included in the output.
+	 *
+	 * @since 5.5.0
+	 * @since {WP_VERSION} `$allow_css` is derived from token-based validation, and
+	 *                     `$css_test_string` is the declaration's authored source text.
+	 *
+	 * @param bool   $allow_css       Whether the CSS declaration is considered safe.
+	 * @param string $css_test_string The declaration's source text.
+	 */
+	$allow_css = apply_filters( 'safecss_filter_attr_allow_css', $allow_css, $source );
+
+	return $allow_css ? $source : '';
+}
+
+/**
+ * Validates a declaration value's token stream.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param string   $css               Preprocessed CSS text.
+ * @param array[]  $tokens            The value's token records.
+ * @param bool     $url_allowed       Whether url constructs are allowed.
+ * @param bool     $gradient_allowed  Whether gradient functions are allowed.
+ * @param string[] $allowed_protocols Allowed url protocols.
+ * @return bool|null Null for a hard rejection (bypasses the filter),
+ *                   otherwise the verdict passed to the filter.
+ */
+function _safecss_validate_value( $css, $tokens, $url_allowed, $gradient_allowed, $allowed_protocols ) {
+	$count = count( $tokens );
+
+	/*
+	 * Hard pass: every url construct, at any nesting depth and for any
+	 * property, must carry a non-empty value with an allowed protocol. This
+	 * also reaches identifiable url payloads inside malformed constructs
+	 * (a bad-url-token, or a malformed `url(` function), so a bad protocol
+	 * cannot escape via a structurally malformed shape.
+	 */
+	for ( $i = 0; $i < $count; $i++ ) {
+		$token = $tokens[ $i ];
+		$url   = null;
+
+		if ( WP_CSS_Token_Processor::TOKEN_URL === $token['type'] ) {
+			$url = trim( (string) $token['value'] );
+		} elseif ( WP_CSS_Token_Processor::TOKEN_BAD_URL === $token['type'] ) {
+			$raw       = substr( $css, $token['start'], $token['length'] );
+			$paren_pos = strpos( $raw, '(' );
+			if ( false !== $paren_pos ) {
+				$raw = substr( $raw, $paren_pos + 1 );
+			}
+			if ( ')' === substr( $raw, -1 ) ) {
+				$raw = substr( $raw, 0, -1 );
+			}
+			$raw = trim( $raw );
+			if ( '' !== $raw && wp_kses_bad_protocol( $raw, $allowed_protocols ) !== $raw ) {
+				return null;
+			}
+		} elseif (
+			WP_CSS_Token_Processor::TOKEN_FUNCTION === $token['type'] &&
+			0 === strcasecmp( (string) $token['value'], 'url' )
+		) {
+			$quoted = _safecss_parse_quoted_url( $tokens, $i );
+			if ( null !== $quoted ) {
+				$url = trim( (string) $tokens[ $quoted['string_index'] ]['value'] );
+			} else {
+				$j = $i + 1;
+				while (
+					$j < $count &&
+					(
+						WP_CSS_Token_Processor::TOKEN_WHITESPACE === $tokens[ $j ]['type'] ||
+						WP_CSS_Token_Processor::TOKEN_COMMENT === $tokens[ $j ]['type']
+					)
+				) {
+					++$j;
+				}
+				if ( $j < $count && WP_CSS_Token_Processor::TOKEN_STRING === $tokens[ $j ]['type'] ) {
+					$payload = trim( (string) $tokens[ $j ]['value'] );
+					if ( '' === $payload || wp_kses_bad_protocol( $payload, $allowed_protocols ) !== $payload ) {
+						return null;
+					}
+				}
+			}
+		}
+
+		if ( null !== $url && ( '' === $url || wp_kses_bad_protocol( $url, $allowed_protocols ) !== $url ) ) {
+			return null;
+		}
+	}
+
+	return _safecss_walk_value( $css, $tokens, $url_allowed, $gradient_allowed );
+}
+
+/**
+ * Walks a value's top-level tokens, enforcing the token allowlist.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param string  $css              Preprocessed CSS text.
+ * @param array[] $tokens           The value's token records.
+ * @param bool    $url_allowed      Whether url constructs are allowed.
+ * @param bool    $gradient_allowed Whether gradient functions are allowed.
+ * @return bool Whether the value is considered safe.
+ */
+function _safecss_walk_value( $css, $tokens, $url_allowed, $gradient_allowed ) {
+	$count = count( $tokens );
+	$i     = 0;
+
+	while ( $i < $count ) {
+		$token = $tokens[ $i ];
+
+		switch ( $token['type'] ) {
+			case WP_CSS_Token_Processor::TOKEN_WHITESPACE:
+			case WP_CSS_Token_Processor::TOKEN_NUMBER:
+			case WP_CSS_Token_Processor::TOKEN_PERCENTAGE:
+			case WP_CSS_Token_Processor::TOKEN_COMMA:
+			case WP_CSS_Token_Processor::TOKEN_COLON:
+			case WP_CSS_Token_Processor::TOKEN_HASH:
+			case WP_CSS_Token_Processor::TOKEN_LEFT_BRACKET:
+			case WP_CSS_Token_Processor::TOKEN_RIGHT_BRACKET:
+				// A stray closing parenthesis has always been accepted.
+			case WP_CSS_Token_Processor::TOKEN_RIGHT_PAREN:
+				++$i;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_IDENT:
+			case WP_CSS_Token_Processor::TOKEN_DIMENSION:
+				// CSS escapes are not allowed outside url values.
+				if ( false !== strpos( substr( $css, $token['start'], $token['length'] ), '\\' ) ) {
+					return false;
+				}
+				++$i;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_STRING:
+				$string_source = substr( $css, $token['start'], $token['length'] );
+				if ( false !== strpos( $string_source, '\\' ) ) {
+					return false;
+				}
+				// Reject strings left unclosed at the end of input.
+				if (
+					strlen( $string_source ) < 2 ||
+					$string_source[0] !== $string_source[ strlen( $string_source ) - 1 ]
+				) {
+					return false;
+				}
+				++$i;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_DELIM:
+				if ( in_array( $token['value'], array( '\\', '&', '=' ), true ) ) {
+					return false;
+				}
+				++$i;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_URL:
+				if ( ! $url_allowed ) {
+					return false;
+				}
+				// The url( name must be authored literally, without CSS escapes.
+				if ( 0 !== strncasecmp( substr( $css, $token['start'], 4 ), 'url(', 4 ) ) {
+					return false;
+				}
+				++$i;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_FUNCTION:
+				// CSS escapes are not allowed in function names.
+				if ( false !== strpos( substr( $css, $token['start'], $token['length'] ), '\\' ) ) {
+					return false;
+				}
+
+				$function_name = (string) $token['value'];
+
+				if ( 0 === strcasecmp( $function_name, 'url' ) ) {
+					$quoted = _safecss_parse_quoted_url( $tokens, $i );
+					if ( null === $quoted || ! $url_allowed ) {
+						return false;
+					}
+					$i = $quoted['close_index'] + 1;
+					break;
+				}
+
+				if ( preg_match( '/^(?:repeating-)?(?:linear|radial|conic)-gradient$/', $function_name ) ) {
+					if ( ! $gradient_allowed ) {
+						return false;
+					}
+					$after = _safecss_walk_gradient( $tokens, $i, $url_allowed );
+					if ( null === $after ) {
+						return false;
+					}
+					$i = $after;
+					break;
+				}
+
+				if ( in_array( $function_name, array( 'var', 'calc', 'min', 'max', 'minmax', 'clamp', 'repeat' ), true ) ) {
+					$after = _safecss_walk_passthrough( $tokens, $i, $url_allowed );
+					if ( null === $after ) {
+						return false;
+					}
+					$i = $after;
+					break;
+				}
+
+				// Unknown function.
+				return false;
+
+			default:
+				/*
+				 * Comments, bad strings, bad urls, braces, bare parenthesis
+				 * blocks, at-keywords, CDO/CDC, and nested semicolons.
+				 */
+				return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * Consumes a gradient function's contents, allowing one nested group level.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param array[] $tokens      The value's token records.
+ * @param int     $i           Index of the gradient's function token.
+ * @param bool    $url_allowed Whether url constructs are allowed.
+ * @return int|null Index just past the gradient's closing parenthesis, or
+ *                  null when the gradient is invalid or unclosed.
+ */
+function _safecss_walk_gradient( $tokens, $i, $url_allowed ) {
+	$count = count( $tokens );
+	$depth = 1;
+	++$i;
+
+	while ( $i < $count && $depth > 0 ) {
+		$token = $tokens[ $i ];
+
+		switch ( $token['type'] ) {
+			case WP_CSS_Token_Processor::TOKEN_FUNCTION:
+			case WP_CSS_Token_Processor::TOKEN_LEFT_PAREN:
+				// Only one level of nested groups is allowed inside a gradient.
+				if ( $depth > 1 ) {
+					return null;
+				}
+				if (
+					WP_CSS_Token_Processor::TOKEN_FUNCTION === $token['type'] &&
+					0 === strcasecmp( (string) $token['value'], 'url' ) &&
+					( ! $url_allowed || null === _safecss_parse_quoted_url( $tokens, $i ) )
+				) {
+					return null;
+				}
+				++$depth;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_RIGHT_PAREN:
+				--$depth;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_URL:
+				if ( 1 !== $depth || ! $url_allowed ) {
+					return null;
+				}
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_BAD_STRING:
+			case WP_CSS_Token_Processor::TOKEN_BAD_URL:
+				return null;
+		}
+
+		++$i;
+	}
+
+	return 0 === $depth ? $i : null;
+}
+
+/**
+ * Consumes an allowed passthrough function (var, calc, min, max, minmax,
+ * clamp, repeat), permissively, tracking parenthesis balance.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param array[] $tokens      The value's token records.
+ * @param int     $i           Index of the function token.
+ * @param bool    $url_allowed Whether url constructs are allowed.
+ * @return int|null Index just past the function's closing parenthesis, or
+ *                  null when the function is invalid or unclosed.
+ */
+function _safecss_walk_passthrough( $tokens, $i, $url_allowed ) {
+	$count = count( $tokens );
+	$depth = 1;
+	++$i;
+
+	while ( $i < $count && $depth > 0 ) {
+		$token = $tokens[ $i ];
+
+		switch ( $token['type'] ) {
+			case WP_CSS_Token_Processor::TOKEN_FUNCTION:
+				if (
+					0 === strcasecmp( (string) $token['value'], 'url' ) &&
+					( ! $url_allowed || null === _safecss_parse_quoted_url( $tokens, $i ) )
+				) {
+					return null;
+				}
+				++$depth;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_LEFT_PAREN:
+				++$depth;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_RIGHT_PAREN:
+				--$depth;
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_URL:
+				if ( ! $url_allowed ) {
+					return null;
+				}
+				break;
+
+			case WP_CSS_Token_Processor::TOKEN_BAD_STRING:
+			case WP_CSS_Token_Processor::TOKEN_BAD_URL:
+				return null;
+		}
+
+		++$i;
+	}
+
+	return 0 === $depth ? $i : null;
+}
+
+/**
+ * Parses a quoted url construct: a url( function token followed by optional
+ * whitespace, one string token, optional whitespace, and a closing paren.
+ *
+ * @since {WP_VERSION}
+ * @access private
+ * @ignore
+ *
+ * @param array[] $tokens The value's token records.
+ * @param int     $i      Index of the url( function token.
+ * @return array|null Array with 'string_index' and 'close_index' keys, or
+ *                    null when the construct is malformed.
+ */
+function _safecss_parse_quoted_url( $tokens, $i ) {
+	$count = count( $tokens );
+
+	$j = $i + 1;
+	if ( $j < $count && WP_CSS_Token_Processor::TOKEN_WHITESPACE === $tokens[ $j ]['type'] ) {
+		++$j;
+	}
+	if ( $j >= $count || WP_CSS_Token_Processor::TOKEN_STRING !== $tokens[ $j ]['type'] ) {
+		return null;
+	}
+
+	$k = $j + 1;
+	if ( $k < $count && WP_CSS_Token_Processor::TOKEN_WHITESPACE === $tokens[ $k ]['type'] ) {
+		++$k;
+	}
+	if ( $k >= $count || WP_CSS_Token_Processor::TOKEN_RIGHT_PAREN !== $tokens[ $k ]['type'] ) {
+		return null;
+	}
+
+	return array(
+		'string_index' => $j,
+		'close_index'  => $k,
+	);
 }
 
 /**
